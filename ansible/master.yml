@@ -1,0 +1,146 @@
+- name: Setup Spark Master
+  hosts: "localhost"
+  become: yes
+  gather_facts: yes
+
+  vars:
+    spark_hadoop_version: "3"
+    spark_home: "/opt/spark-3.3.3-bin-hadoop3"
+    java_package: "openjdk-8-jdk"
+  
+  tasks:
+    - name: Install Java OpenJDK 8
+      become: yes
+      apt:
+        name: "{{ java_package }}"
+        state: present
+    
+    - name: Install Pip
+      become: yes
+      apt:
+        name: python3-pip
+        state: present
+        
+    - name: install dependencies
+      become: yes
+      command: "pip3 install pyspark==3.3.3 httpx asyncio boto3 flask"
+    
+    - name: Download Apache Spark
+      get_url:
+        url: "https://dlcdn.apache.org/spark/spark-3.3.3/spark-3.3.3-bin-hadoop3.tgz"
+        dest: "/home/ubuntu/spark-3.3.3-bin-hadoop3.tgz"
+      register: download_result
+
+    - name: Extract Apache Spark
+      become: yes
+      unarchive:
+        src: "/home/ubuntu/spark-3.3.3-bin-hadoop3.tgz"
+        dest: "/opt/"
+        remote_src: yes
+      when: download_result.changed
+      
+    - name: Copy spark-env.sh.template
+      become: yes
+      command: "cp {{ spark_home }}/conf/spark-env.sh.template {{ spark_home }}/conf/spark-env.sh"
+      when: download_result.changed
+        
+    - name: Download Snowflakes Jar
+      get_url:
+        url: "https://repo1.maven.org/maven2/net/snowflake/spark-snowflake_2.12/2.12.0-spark_3.3/spark-snowflake_2.12-2.12.0-spark_3.3.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+    
+    - name: Download Snowflakes JDBC Jar
+      get_url:
+        url: "https://repo1.maven.org/maven2/net/snowflake/snowflake-jdbc/3.13.30/snowflake-jdbc-3.13.30.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+
+
+    - name: Download sql spark connector
+      get_url:
+        url: "https://repo1.maven.org/maven2/com/microsoft/azure/spark-mssql-connector_2.12/1.3.0-BETA/spark-mssql-connector_2.12-1.3.0-BETA.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+
+
+    - name: Microsoft JDBC Driver for SQL Server
+      get_url:
+        url: "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.4.2.jre8/mssql-jdbc-12.4.2.jre8.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+
+
+    - name: Download hadoop-aws
+      get_url:
+        url: "https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.1/hadoop-aws-3.3.1.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+
+    - name: Download aws-java-bundle
+      get_url:
+        url: "https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.576/aws-java-sdk-bundle-1.12.576.jar"
+        dest: "{{ spark_home }}/jars/"
+      when: download_result.changed
+    
+    - name: Creates directory spark events
+      file:
+        path: /home/ubuntu/spark-events/
+        state: directory
+    
+    - name: Add public dns to spark-env.sh
+      become: yes
+      lineinfile:
+        path: "{{ spark_home }}/conf/spark-env.sh"
+        line: SPARK_PUBLIC_DNS={{ public_ip }}
+        state: present
+      when: download_result.changed
+    
+    - name: copy spark-default.conf file from example 
+      become: yes
+      command: "cp {{spark_home}}/conf/spark-defaults.conf.template {{spark_home}}/conf/spark-defaults.conf"
+      when: download_result.changed
+
+    - name:  write to spark-default-conf 
+      become: yes
+      blockinfile:
+        path: "{{ spark_home }}/conf/spark-defaults.conf"
+        block: |
+          spark.master.rest.enabled true
+          spark.eventLog.enabled true
+          spark.eventLog.dir /home/ubuntu/spark-events/
+          spark.history.fs.logDirectory /home/ubuntu/spark-events/
+          spark.scheduler.mode FAIR
+      when: download_result.changed
+    
+    - name:  Add SPARK_HOME to ~/.bashrc
+      become: yes
+      blockinfile:
+        path: .bashrc
+        block: |
+          export SPARK_HOME="{{ spark_home }}"
+          export PATH="$PATH:{{ spark_home }}"
+      when: download_result.changed
+
+    - name: Start Spark Master
+      command: "{{ spark_home }}/sbin/start-master.sh"
+
+    - name: start history server
+      command: "{{ spark_home }}/sbin/start-history-server.sh"
+
+    - name: Set ACCESS_KEY
+      become: yes
+      blockinfile:
+        path: .bashrc
+        block: |
+          export ACCESS_KEY="----key----"
+          export SECRET_KEY="----secret-key----"
+          export REGION="-----region----"
+      when: download_result.changed
+        
+    - name: Execute server.py in the background
+      command: "nohup python3 /home/ubuntu/server.py >/dev/null 2>&1 &"
+      async: 3600
+      poll: 0
+      ignore_errors: yes
+   

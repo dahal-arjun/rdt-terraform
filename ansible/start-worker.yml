@@ -1,0 +1,37 @@
+---
+- name: Setup Spark Slave
+  hosts: "localhost"
+  become: yes
+  gather_facts: yes
+
+  vars:
+    spark_home: "/opt/spark-3.3.3-bin-hadoop3"
+
+
+  tasks:
+    - name: Run a command to get IP address
+      command: "curl ifconfig.me"
+      register: public_ip
+    
+    - name: Add public dns to spark-env.sh
+      become: yes
+      lineinfile:
+        path: "{{ spark_home }}/conf/spark-env.sh"
+        line: SPARK_PUBLIC_DNS={{ public_ip.stdout }}
+  
+    - name: Start Spark Worker Asynchronously
+      shell: "{{ spark_home }}/sbin/start-worker.sh spark://{{ master_public_ip }}:7077"
+      async: 600
+      poll: 0
+      register: spark_worker_result
+
+    - name: Wait for Spark Worker to Complete
+      async_status:
+        jid: "{{ spark_worker_result.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 4
+      delay: 10
+
+    - name: start history server
+      command: "{{ spark_home }}/sbin/start-history-server.sh"
